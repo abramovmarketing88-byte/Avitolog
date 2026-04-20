@@ -218,13 +218,10 @@ async def _maybe_handle_niche_override(
 ) -> bool:
     intent = str(payload.get("intent", "")).lower()
     candidate_niche = _safe_text(payload.get("niche")) or _normalize_niche_candidate(message.text or "")
-    current_data = await state.get_data()
-    current_niche = str(current_data.get("niche", "")).strip().lower()
-    candidate_niche_low = candidate_niche.strip().lower()
-    is_different_niche = bool(candidate_niche_low and candidate_niche_low != current_niche)
+    # Guardrail: do not treat arbitrary free text as niche override.
+    # Switch niche only when AI explicitly marks set_niche or user clearly asks to reset.
     if intent != "set_niche" and not _looks_like_niche_reset(message.text or ""):
-        if not is_different_niche:
-            return False
+        return False
     if len(candidate_niche) < 4:
         return False
 
