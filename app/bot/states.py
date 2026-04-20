@@ -7,3 +7,4 @@ class AdGenerationStates(StatesGroup):
     waiting_ads_count = State()
     waiting_cities = State()
     waiting_geo_type = State()
+    waiting_confirmation = State()
