@@ -127,7 +127,19 @@ def _safe_cities(payload: dict[str, Any]) -> list[str]:
     raw = payload.get("cities")
     if not isinstance(raw, list):
         return []
-    return [str(item).strip() for item in raw if str(item).strip()]
+    cities: list[str] = []
+    for item in raw:
+        value = str(item).strip()
+        if not value:
+            continue
+        lower = value.lower()
+        # Reject meta phrases that are not city names.
+        if any(token in lower for token in ("самых крупных", "крупных город", "городов", "сгенер", "топ", "штук")):
+            continue
+        if re.search(r"\d", value):
+            continue
+        cities.append(value)
+    return cities
 
 
 def _safe_geo(payload: dict[str, Any]) -> str | None:

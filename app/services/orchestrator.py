@@ -109,7 +109,15 @@ class AdsOrchestrator:
             return candidate
 
         while True:
-            fallback = truncate_title(f"{niche}: рост отклика {fallback_counter}")
+            fallback_templates = [
+                f"{niche}: больше заявок и продаж",
+                f"{niche}: стабильный поток клиентов",
+                f"{niche}: усилим отклик объявлений",
+                f"{niche}: запуск с понятным планом",
+                f"{niche}: рост конверсии без хаоса",
+                f"{niche}: приводим целевые обращения",
+            ]
+            fallback = truncate_title(fallback_templates[(fallback_counter - 1) % len(fallback_templates)])
             fallback_counter += 1
             if fallback not in used_titles:
                 return fallback

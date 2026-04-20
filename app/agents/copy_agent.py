@@ -52,18 +52,18 @@ class CopyAgent:
                         title = item.strip()
                         if self._is_usable_title(title, niche, segment) and title not in titles:
                             titles.append(title)
+            if len(titles) < max(8, size // 2):
+                for item in self._local_title_variants(niche):
+                    if item not in titles and self._is_usable_title(item, niche, segment):
+                        titles.append(item)
+                    if len(titles) >= size:
+                        break
             if titles:
-                return titles
+                return titles[:size]
         except Exception:  # noqa: BLE001
             pass
 
-        return [
-            f"{niche} под ключ: больше заявок",
-            f"{niche}: рост отклика и продаж",
-            f"{niche} с понятным планом запуска",
-            f"{niche}: улучшим объявления и конверсию",
-            f"{niche} без лишних затрат времени",
-        ]
+        return self._local_title_variants(niche)[:size]
 
     @staticmethod
     def _is_usable_title(title: str, niche: str, segment: str) -> bool:
@@ -81,3 +81,28 @@ class CopyAgent:
             return False
 
         return True
+
+    @staticmethod
+    def _local_title_variants(niche: str) -> list[str]:
+        return [
+            f"{niche} под ключ для роста заявок",
+            f"{niche}: повышаем отклик объявлений",
+            f"{niche} с фокусом на продажи",
+            f"{niche}: системный запуск и масштаб",
+            f"{niche} для стабильного потока лидов",
+            f"{niche}: аудит и усиление объявлений",
+            f"{niche} без слива бюджета",
+            f"{niche}: больше целевых обращений",
+            f"{niche} с понятной стратегией продвижения",
+            f"{niche}: выстроим поток заявок",
+            f"{niche} для малого бизнеса под ключ",
+            f"{niche}: рост конверсии и отклика",
+            f"{niche} с прозрачным планом действий",
+            f"{niche}: усилим оффер и тексты",
+            f"{niche} с упором на окупаемость",
+            f"{niche}: результат без хаотичных тестов",
+            f"{niche} для увеличения входящих заявок",
+            f"{niche}: грамотная упаковка и запуск",
+            f"{niche} для бизнеса с понятным KPI",
+            f"{niche}: оптимизация под реальный спрос",
+        ]
