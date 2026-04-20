@@ -11,6 +11,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import FSInputFile, KeyboardButton, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from app.agents.jtbd_agent import JTBDAgent
+from app.agents.input_parser_agent import InputParserAgent
 from app.services.excel_service import export_ads_to_excel
 from app.services.geo_service import generate_geo
 from app.services.orchestrator import AdsOrchestrator, GenerationConfig
@@ -44,6 +45,8 @@ AUTO_CITIES = (
     "Балашиха,Калининград,Курск,Севастополь,Сочи,Ставрополь,Улан-Удэ,Тверь,Магнитогорск,"
     "Иваново,Брянск,Белгород"
 ).split(",")
+CONFIRM_TEXT = "✅ Подтвердить"
+EDIT_TEXT = "✏️ Изменить параметры"
 
 
 def _extract_indexes(text: str, upper_bound: int) -> list[int]:
@@ -84,6 +87,22 @@ def _extract_cities(text: str) -> list[str]:
     return [chunk.strip() for chunk in chunks if chunk.strip()]
 
 
+def _safe_segment_numbers(payload: dict[str, Any], upper_bound: int) -> list[int]:
+    numbers = payload.get("segment_numbers")
+    if not isinstance(numbers, list):
+        return []
+    indexes: list[int] = []
+    seen: set[int] = set()
+    for value in numbers:
+        if not isinstance(value, int):
+            continue
+        idx = value - 1
+        if 0 <= idx < upper_bound and idx not in seen:
+            seen.add(idx)
+            indexes.append(idx)
+    return indexes
+
+
 def _geo_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -95,13 +114,38 @@ def _geo_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+def _confirm_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=CONFIRM_TEXT), KeyboardButton(text=EDIT_TEXT)]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def _build_preview_card(data: dict[str, Any]) -> str:
+    segments: list[str] = data.get("selected_segments", [])
+    cities: list[str] = data.get("cities", [])
+    geo_type = str(data.get("geo_type", ""))
+    cities_preview = ", ".join(cities[:10]) + ("..." if len(cities) > 10 else "")
+    segments_preview = "\n".join([f"• {segment}" for segment in segments]) or "—"
+    return (
+        "Проверьте параметры перед генерацией:\n\n"
+        f"Ниша: {data.get('niche', '—')}\n"
+        f"Количество объявлений: {data.get('ads_count', '—')}\n"
+        f"Тип GEO: {geo_type}\n"
+        f"Города ({len(cities)}): {cities_preview or '—'}\n\n"
+        f"Сегменты:\n{segments_preview}\n\n"
+        "Нажмите «Подтвердить», чтобы запустить генерацию."
+    )
+
+
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(AdGenerationStates.waiting_niche)
     await message.answer(
         "Привет! Я помогу собрать пачку Avito-объявлений в Excel.\n\n"
-        "Шаг 1/5: отправьте нишу или услугу (например: услуги авитолога).",
+        "Шаг 1/6: отправьте нишу или услугу (например: услуги авитолога).",
         reply_markup=ReplyKeyboardRemove(),
     )
 
@@ -127,33 +171,47 @@ async def receive_niche(message: Message, state: FSMContext, jtbd_agent: JTBDAge
     await state.set_state(AdGenerationStates.waiting_segment_selection)
 
     indexed = "\n".join([f"{i + 1}. {seg}" for i, seg in enumerate(segments)])
-    await message.answer("Шаг 2/5: выберите сегменты.\nМожно так: 1,3 или 1 и 3.\n\n" + indexed)
+    await message.answer("Шаг 2/6: выберите сегменты.\nМожно так: 1,3 или 1 и 3.\n\n" + indexed)
 
 
 @router.message(AdGenerationStates.waiting_segment_selection)
-async def receive_segments(message: Message, state: FSMContext) -> None:
+async def receive_segments(message: Message, state: FSMContext, input_parser_agent: InputParserAgent) -> None:
     data = await state.get_data()
     segments: list[str] = data.get("segments", [])
 
     indexes = _extract_indexes(message.text or "", len(segments))
+    if not indexes:
+        try:
+            parsed = await asyncio.to_thread(input_parser_agent.parse, message.text or "")
+            indexes = _safe_segment_numbers(parsed, len(segments))
+        except Exception:  # noqa: BLE001
+            logger.exception("AI segment parsing failed")
     chosen = [segments[i] for i in indexes]
 
     if not chosen:
-        await message.answer("Не понял номера сегментов. Пример: 1,3 или 2 и 5.")
+        await message.answer("Не понял выбор сегментов. Пример: 1,3 или «первый и третий».")
         return
 
     await state.update_data(selected_segments=chosen)
     await state.set_state(AdGenerationStates.waiting_ads_count)
     chosen_pretty = "\n".join([f"• {segment}" for segment in chosen])
     await message.answer(
-        "Шаг 3/5: сколько объявлений нужно?\nВведите число от 1 до 300.\n\n"
+        "Шаг 3/6: сколько объявлений нужно?\nВведите число от 1 до 300.\n\n"
         f"Вы выбрали сегменты:\n{chosen_pretty}"
     )
 
 
 @router.message(AdGenerationStates.waiting_ads_count)
-async def receive_ads_count(message: Message, state: FSMContext) -> None:
+async def receive_ads_count(message: Message, state: FSMContext, input_parser_agent: InputParserAgent) -> None:
     count = _extract_first_int((message.text or "").strip())
+    if count is None:
+        try:
+            parsed = await asyncio.to_thread(input_parser_agent.parse, message.text or "")
+            parsed_count = parsed.get("ads_count")
+            if isinstance(parsed_count, int):
+                count = parsed_count
+        except Exception:  # noqa: BLE001
+            logger.exception("AI ads_count parsing failed")
     if count is None or count <= 0 or count > 300:
         await message.answer("Введите число от 1 до 300.")
         return
@@ -161,7 +219,7 @@ async def receive_ads_count(message: Message, state: FSMContext) -> None:
     await state.update_data(ads_count=count)
     await state.set_state(AdGenerationStates.waiting_cities)
     await message.answer(
-        "Шаг 4/5: введите города через запятую.\n"
+        "Шаг 4/6: введите города через запятую.\n"
         "Например: Москва, Санкт-Петербург\n\n"
         "Или напишите: «сгенерируй города, 20 самых крупных».",
     )
@@ -178,44 +236,83 @@ async def receive_cities(message: Message, state: FSMContext) -> None:
     await state.set_state(AdGenerationStates.waiting_geo_type)
     cities_preview = ", ".join(cities[:5]) + ("..." if len(cities) > 5 else "")
     await message.answer(
-        "Шаг 5/5: выберите тип GEO:\ncity / metro / district / address\n\n"
+        "Шаг 5/6: выберите тип GEO:\ncity / metro / district / address\n\n"
         f"Города: {cities_preview}",
         reply_markup=_geo_keyboard(),
     )
 
 
 @router.message(AdGenerationStates.waiting_geo_type, F.text)
-async def receive_geo_type(message: Message, state: FSMContext, orchestrator: AdsOrchestrator) -> None:
+async def receive_geo_type(
+    message: Message,
+    state: FSMContext,
+    orchestrator: AdsOrchestrator,
+    input_parser_agent: InputParserAgent,
+) -> None:
     geo_type = _normalize_geo_type(message.text or "")
+    if geo_type is None:
+        try:
+            parsed = await asyncio.to_thread(input_parser_agent.parse, message.text or "")
+            parsed_geo = parsed.get("geo_type")
+            if isinstance(parsed_geo, str):
+                geo_type = parsed_geo.strip().lower()
+        except Exception:  # noqa: BLE001
+            logger.exception("AI geo parsing failed")
     if geo_type not in ALLOWED_GEO:
         await message.answer("Некорректный GEO. Используйте: city / metro / district / address")
         return
 
+    await state.update_data(geo_type=geo_type)
     data: dict[str, Any] = await state.get_data()
-    config = GenerationConfig(
-        niche=data["niche"],
-        selected_segments=data["selected_segments"],
-        cities=data["cities"],
-        geo_type=geo_type,
-        ads_count=data["ads_count"],
+    await state.set_state(AdGenerationStates.waiting_confirmation)
+    await message.answer(
+        "Шаг 6/6: подтверждение",
+        reply_markup=_confirm_keyboard(),
     )
+    await message.answer(_build_preview_card(data))
 
-    await message.answer("Запускаю генерацию... Это может занять до 1-2 минут.", reply_markup=ReplyKeyboardRemove())
 
-    try:
-        rows = await asyncio.to_thread(orchestrator.generate_ads, config, generate_geo)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            file_path = await asyncio.to_thread(export_ads_to_excel, rows, tmp.name)
-        await message.answer_document(
-            FSInputFile(file_path),
-            caption=f"Готово! Сгенерировано объявлений: {len(rows)}",
+@router.message(AdGenerationStates.waiting_confirmation, F.text)
+async def receive_confirmation(message: Message, state: FSMContext, orchestrator: AdsOrchestrator) -> None:
+    text = (message.text or "").strip().lower()
+    if text in {"подтвердить", "✅ подтвердить", "ok", "да", "запустить"}:
+        data: dict[str, Any] = await state.get_data()
+        config = GenerationConfig(
+            niche=data["niche"],
+            selected_segments=data["selected_segments"],
+            cities=data["cities"],
+            geo_type=data["geo_type"],
+            ads_count=data["ads_count"],
         )
-        try:
-            os.unlink(file_path)
-        except OSError:
-            logger.warning("Failed to remove temporary xlsx file: %s", file_path)
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Ad generation failed")
-        await message.answer(f"Ошибка генерации: {exc}")
+        await message.answer("Запускаю генерацию... Это может занять до 1-2 минут.", reply_markup=ReplyKeyboardRemove())
 
-    await state.clear()
+        try:
+            rows = await asyncio.to_thread(orchestrator.generate_ads, config, generate_geo)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+                file_path = await asyncio.to_thread(export_ads_to_excel, rows, tmp.name)
+            await message.answer_document(
+                FSInputFile(file_path),
+                caption=f"Готово! Сгенерировано объявлений: {len(rows)}",
+            )
+            try:
+                os.unlink(file_path)
+            except OSError:
+                logger.warning("Failed to remove temporary xlsx file: %s", file_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Ad generation failed")
+            await message.answer(f"Ошибка генерации: {exc}")
+        await state.clear()
+        return
+
+    if text in {"изменить", "✏️ изменить параметры", "изменить параметры", "редактировать", "начать заново"}:
+        await state.set_state(AdGenerationStates.waiting_niche)
+        await message.answer(
+            "Ок, обновим параметры. Отправьте нишу заново (шаг 1/6).",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    await message.answer(
+        "Выберите действие кнопкой: «✅ Подтвердить» или «✏️ Изменить параметры».",
+        reply_markup=_confirm_keyboard(),
+    )

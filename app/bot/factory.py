@@ -3,6 +3,7 @@ from aiogram.client.default import DefaultBotProperties
 
 from app.agents.copy_agent import CopyAgent
 from app.agents.html_agent import HTMLAgent
+from app.agents.input_parser_agent import InputParserAgent
 from app.agents.jtbd_agent import JTBDAgent
 from app.bot.handlers import router
 from app.config import Settings
@@ -18,6 +19,7 @@ def create_dispatcher(settings: Settings) -> tuple[Bot, Dispatcher]:
     )
 
     jtbd_agent = JTBDAgent(openai_service, temperature=settings.default_temperature)
+    input_parser_agent = InputParserAgent(openai_service)
     copy_agent = CopyAgent(openai_service, temperature=settings.default_temperature)
     html_agent = HTMLAgent(openai_service, temperature=settings.default_temperature)
     orchestrator = AdsOrchestrator(copy_agent=copy_agent, html_agent=html_agent)
@@ -26,6 +28,7 @@ def create_dispatcher(settings: Settings) -> tuple[Bot, Dispatcher]:
     dp = Dispatcher()
 
     dp["jtbd_agent"] = jtbd_agent
+    dp["input_parser_agent"] = input_parser_agent
     dp["orchestrator"] = orchestrator
     dp.include_router(router)
 

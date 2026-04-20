@@ -10,7 +10,7 @@ load_dotenv()
 class Settings:
     openai_api_key: str
     bot_token: str
-    openai_model: str = "gpt-4.1-mini"
+    openai_model: str = "gpt-4o-mini"
     default_temperature: float = 0.7
     max_retries: int = 3
 
@@ -18,7 +18,7 @@ class Settings:
     def from_env() -> "Settings":
         openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
         bot_token = os.getenv("BOT_TOKEN", "").strip()
-        openai_model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip()
+        openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
         default_temperature = float(os.getenv("DEFAULT_TEMPERATURE", "0.7"))
         max_retries = int(os.getenv("MAX_RETRIES", "3"))
 

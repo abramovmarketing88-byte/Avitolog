@@ -41,8 +41,14 @@ class OpenAIService:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            start = text.find("[")
-            end = text.rfind("]")
-            if start != -1 and end != -1 and end > start:
-                return json.loads(text[start : end + 1])
+            # Tolerate wrappers around JSON and try both object and array payloads.
+            obj_start = text.find("{")
+            obj_end = text.rfind("}")
+            if obj_start != -1 and obj_end != -1 and obj_end > obj_start:
+                return json.loads(text[obj_start : obj_end + 1])
+
+            arr_start = text.find("[")
+            arr_end = text.rfind("]")
+            if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
+                return json.loads(text[arr_start : arr_end + 1])
             raise
