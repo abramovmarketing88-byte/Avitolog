@@ -87,6 +87,22 @@ def _extract_cities(text: str) -> list[str]:
     return [chunk.strip() for chunk in chunks if chunk.strip()]
 
 
+def _looks_like_niche_reset(text: str) -> bool:
+    normalized = (text or "").strip().lower()
+    if not normalized:
+        return False
+    triggers = ("назад", "заново", "друг", "смен", "надо", "не это", "другая ниша", "другая услуга")
+    return any(trigger in normalized for trigger in triggers)
+
+
+def _normalize_niche_candidate(text: str) -> str:
+    value = (text or "").strip()
+    value = re.sub(r"(?i)\b(давай|назад|заново|нужно|надо|хочу|сделай|поменяй|смени)\b", " ", value)
+    value = re.sub(r"[,:;.!?]+", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
 def _safe_segment_numbers(payload: dict[str, Any], upper_bound: int) -> list[int]:
     numbers = payload.get("segment_numbers")
     if not isinstance(numbers, list):
@@ -175,7 +191,12 @@ async def receive_niche(message: Message, state: FSMContext, jtbd_agent: JTBDAge
 
 
 @router.message(AdGenerationStates.waiting_segment_selection)
-async def receive_segments(message: Message, state: FSMContext, input_parser_agent: InputParserAgent) -> None:
+async def receive_segments(
+    message: Message,
+    state: FSMContext,
+    input_parser_agent: InputParserAgent,
+    jtbd_agent: JTBDAgent,
+) -> None:
     data = await state.get_data()
     segments: list[str] = data.get("segments", [])
 
@@ -189,6 +210,24 @@ async def receive_segments(message: Message, state: FSMContext, input_parser_age
     chosen = [segments[i] for i in indexes]
 
     if not chosen:
+        candidate_niche = _normalize_niche_candidate(message.text or "")
+        if _looks_like_niche_reset(message.text or "") and len(candidate_niche) >= 6:
+            try:
+                segments_data = await asyncio.to_thread(jtbd_agent.generate_segments, candidate_niche)
+                new_segments = [str(item.get("segment", "")).strip() for item in segments_data if item.get("segment")]
+                if new_segments:
+                    await state.update_data(niche=candidate_niche, segments=new_segments, selected_segments=[])
+                    await state.set_state(AdGenerationStates.waiting_segment_selection)
+                    indexed = "\n".join([f"{i + 1}. {seg}" for i, seg in enumerate(new_segments)])
+                    await message.answer(
+                        "Ок, сменил нишу и пересобрал сегменты через ИИ.\n"
+                        "Шаг 2/6: выберите сегменты.\nМожно так: 1,3 или 1 и 3.\n\n"
+                        + indexed
+                    )
+                    return
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to re-generate segments from free text niche change")
+
         await message.answer("Не понял выбор сегментов. Пример: 1,3 или «первый и третий».")
         return
 
