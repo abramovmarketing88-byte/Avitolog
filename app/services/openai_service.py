@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -38,9 +39,16 @@ class OpenAIService:
 
     def generate_json(self, system_prompt: str, user_prompt: str, temperature: float) -> Any:
         text = self.generate_text(system_prompt, user_prompt, temperature)
+        if not text.strip():
+            raise ValueError("Model returned empty JSON response")
+
         try:
             return json.loads(text)
         except json.JSONDecodeError:
+            fenced = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, flags=re.DOTALL)
+            if fenced:
+                return json.loads(fenced.group(1))
+
             # Tolerate wrappers around JSON and try both object and array payloads.
             obj_start = text.find("{")
             obj_end = text.rfind("}")
