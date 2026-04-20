@@ -34,7 +34,9 @@ class CopyAgent:
             f"Сгенерируй {size} уникальных заголовков для Avito длиной до 50 символов. "
             "Верни только JSON-объект: {\"titles\": [\"...\", \"...\"]}. "
             f"Ниша: {niche}. Сегмент: {segment}. "
-            "Без кликбейта, CAPS и ложных обещаний."
+            "Без кликбейта, CAPS и ложных обещаний. "
+            "Каждый заголовок должен быть понятным и предметным: что за услуга и какой результат/выгода. "
+            f"Нельзя делать заголовок только названием сегмента (например: '{segment}' или '{segment}: ...')."
         )
         try:
             payload = self.openai_service.generate_json(
@@ -48,7 +50,7 @@ class CopyAgent:
                 for item in payload["titles"]:
                     if isinstance(item, str):
                         title = item.strip()
-                        if title and title not in titles:
+                        if self._is_usable_title(title, niche, segment) and title not in titles:
                             titles.append(title)
             if titles:
                 return titles
@@ -56,9 +58,26 @@ class CopyAgent:
             pass
 
         return [
-            f"{segment}: {niche}",
-            f"{niche} под {segment.lower()}",
-            f"{niche} для сегмента {segment.lower()}",
-            f"{niche}: помощь для {segment.lower()}",
-            f"{segment}: {niche} без лишних затрат",
+            f"{niche} под ключ: больше заявок",
+            f"{niche}: рост отклика и продаж",
+            f"{niche} с понятным планом запуска",
+            f"{niche}: улучшим объявления и конверсию",
+            f"{niche} без лишних затрат времени",
         ]
+
+    @staticmethod
+    def _is_usable_title(title: str, niche: str, segment: str) -> bool:
+        value = " ".join(title.split())
+        if not value or len(value) < 16 or len(value) > 50:
+            return False
+
+        lower = value.lower()
+        lower_segment = segment.strip().lower()
+        if lower == lower_segment or lower.startswith(f"{lower_segment}:"):
+            return False
+
+        niche_words = [word for word in niche.lower().split() if len(word) >= 4]
+        if niche_words and not any(word in lower for word in niche_words):
+            return False
+
+        return True

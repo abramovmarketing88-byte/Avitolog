@@ -119,6 +119,50 @@ def _safe_segment_numbers(payload: dict[str, Any], upper_bound: int) -> list[int
     return indexes
 
 
+def _safe_text(value: Any) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _safe_cities(payload: dict[str, Any]) -> list[str]:
+    raw = payload.get("cities")
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _safe_geo(payload: dict[str, Any]) -> str | None:
+    value = payload.get("geo_type")
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized if normalized in ALLOWED_GEO else None
+
+
+def _is_confirm(payload: dict[str, Any], raw_text: str) -> bool:
+    if payload.get("confirm") is True:
+        return True
+    intent = str(payload.get("intent", "")).lower()
+    text = (raw_text or "").strip().lower()
+    return intent == "confirm" or text in {"подтверждаю", "подтвердить", "✅ подтвердить", "ok", "да", "запустить"}
+
+
+def _is_edit(payload: dict[str, Any], raw_text: str) -> bool:
+    if payload.get("edit") is True:
+        return True
+    intent = str(payload.get("intent", "")).lower()
+    text = (raw_text or "").strip().lower()
+    return intent in {"edit", "restart"} or text in {"изменить", "изменить параметры", "✏️ изменить параметры", "редактировать", "начать заново"}
+
+
+async def _ai_parse(input_parser_agent: InputParserAgent, text: str) -> dict[str, Any]:
+    try:
+        payload = await asyncio.to_thread(input_parser_agent.parse, text or "")
+        return payload if isinstance(payload, dict) else {}
+    except Exception:  # noqa: BLE001
+        logger.exception("AI parsing failed")
+        return {}
+
+
 def _geo_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -167,8 +211,14 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
 
 @router.message(AdGenerationStates.waiting_niche)
-async def receive_niche(message: Message, state: FSMContext, jtbd_agent: JTBDAgent) -> None:
-    niche = (message.text or "").strip()
+async def receive_niche(
+    message: Message,
+    state: FSMContext,
+    jtbd_agent: JTBDAgent,
+    input_parser_agent: InputParserAgent,
+) -> None:
+    payload = await _ai_parse(input_parser_agent, message.text or "")
+    niche = _safe_text(payload.get("niche")) or (message.text or "").strip()
     if not niche:
         await message.answer("Ниша не должна быть пустой. Напишите одним сообщением, что продвигаем.")
         return
@@ -199,19 +249,16 @@ async def receive_segments(
 ) -> None:
     data = await state.get_data()
     segments: list[str] = data.get("segments", [])
+    payload = await _ai_parse(input_parser_agent, message.text or "")
 
-    indexes = _extract_indexes(message.text or "", len(segments))
+    indexes = _safe_segment_numbers(payload, len(segments)) or _extract_indexes(message.text or "", len(segments))
     if not indexes:
-        try:
-            parsed = await asyncio.to_thread(input_parser_agent.parse, message.text or "")
-            indexes = _safe_segment_numbers(parsed, len(segments))
-        except Exception:  # noqa: BLE001
-            logger.exception("AI segment parsing failed")
+        indexes = []
     chosen = [segments[i] for i in indexes]
 
     if not chosen:
-        candidate_niche = _normalize_niche_candidate(message.text or "")
-        if _looks_like_niche_reset(message.text or "") and len(candidate_niche) >= 6:
+        candidate_niche = _safe_text(payload.get("niche")) or _normalize_niche_candidate(message.text or "")
+        if (payload.get("intent") == "set_niche" or _looks_like_niche_reset(message.text or "")) and len(candidate_niche) >= 6:
             try:
                 segments_data = await asyncio.to_thread(jtbd_agent.generate_segments, candidate_niche)
                 new_segments = [str(item.get("segment", "")).strip() for item in segments_data if item.get("segment")]
@@ -242,15 +289,9 @@ async def receive_segments(
 
 @router.message(AdGenerationStates.waiting_ads_count)
 async def receive_ads_count(message: Message, state: FSMContext, input_parser_agent: InputParserAgent) -> None:
-    count = _extract_first_int((message.text or "").strip())
-    if count is None:
-        try:
-            parsed = await asyncio.to_thread(input_parser_agent.parse, message.text or "")
-            parsed_count = parsed.get("ads_count")
-            if isinstance(parsed_count, int):
-                count = parsed_count
-        except Exception:  # noqa: BLE001
-            logger.exception("AI ads_count parsing failed")
+    payload = await _ai_parse(input_parser_agent, message.text or "")
+    parsed_count = payload.get("ads_count")
+    count = parsed_count if isinstance(parsed_count, int) else _extract_first_int((message.text or "").strip())
     if count is None or count <= 0 or count > 300:
         await message.answer("Введите число от 1 до 300.")
         return
@@ -265,13 +306,23 @@ async def receive_ads_count(message: Message, state: FSMContext, input_parser_ag
 
 
 @router.message(AdGenerationStates.waiting_cities)
-async def receive_cities(message: Message, state: FSMContext) -> None:
-    cities = _extract_cities(message.text or "")
+async def receive_cities(message: Message, state: FSMContext, input_parser_agent: InputParserAgent) -> None:
+    payload = await _ai_parse(input_parser_agent, message.text or "")
+    cities = _safe_cities(payload) or _extract_cities(message.text or "")
     if not cities:
         await message.answer("Список городов пуст. Попробуйте снова.")
         return
 
     await state.update_data(cities=cities)
+    parsed_geo = _safe_geo(payload)
+    if parsed_geo in ALLOWED_GEO:
+        await state.update_data(geo_type=parsed_geo)
+        data: dict[str, Any] = await state.get_data()
+        await state.set_state(AdGenerationStates.waiting_confirmation)
+        await message.answer("Шаг 6/6: подтверждение", reply_markup=_confirm_keyboard())
+        await message.answer(_build_preview_card(data))
+        return
+
     await state.set_state(AdGenerationStates.waiting_geo_type)
     cities_preview = ", ".join(cities[:5]) + ("..." if len(cities) > 5 else "")
     await message.answer(
@@ -288,15 +339,8 @@ async def receive_geo_type(
     orchestrator: AdsOrchestrator,
     input_parser_agent: InputParserAgent,
 ) -> None:
-    geo_type = _normalize_geo_type(message.text or "")
-    if geo_type is None:
-        try:
-            parsed = await asyncio.to_thread(input_parser_agent.parse, message.text or "")
-            parsed_geo = parsed.get("geo_type")
-            if isinstance(parsed_geo, str):
-                geo_type = parsed_geo.strip().lower()
-        except Exception:  # noqa: BLE001
-            logger.exception("AI geo parsing failed")
+    payload = await _ai_parse(input_parser_agent, message.text or "")
+    geo_type = _safe_geo(payload) or _normalize_geo_type(message.text or "")
     if geo_type not in ALLOWED_GEO:
         await message.answer("Некорректный GEO. Используйте: city / metro / district / address")
         return
@@ -312,9 +356,15 @@ async def receive_geo_type(
 
 
 @router.message(AdGenerationStates.waiting_confirmation, F.text)
-async def receive_confirmation(message: Message, state: FSMContext, orchestrator: AdsOrchestrator) -> None:
+async def receive_confirmation(
+    message: Message,
+    state: FSMContext,
+    orchestrator: AdsOrchestrator,
+    input_parser_agent: InputParserAgent,
+) -> None:
+    payload = await _ai_parse(input_parser_agent, message.text or "")
     text = (message.text or "").strip().lower()
-    if text in {"подтвердить", "✅ подтвердить", "ok", "да", "запустить"}:
+    if _is_confirm(payload, text):
         data: dict[str, Any] = await state.get_data()
         config = GenerationConfig(
             niche=data["niche"],
@@ -343,7 +393,7 @@ async def receive_confirmation(message: Message, state: FSMContext, orchestrator
         await state.clear()
         return
 
-    if text in {"изменить", "✏️ изменить параметры", "изменить параметры", "редактировать", "начать заново"}:
+    if _is_edit(payload, text):
         await state.set_state(AdGenerationStates.waiting_niche)
         await message.answer(
             "Ок, обновим параметры. Отправьте нишу заново (шаг 1/6).",
@@ -358,10 +408,34 @@ async def receive_confirmation(message: Message, state: FSMContext, orchestrator
 
 
 @router.message(F.text)
-async def handle_free_text_after_flow(message: Message, state: FSMContext) -> None:
+async def handle_free_text_after_flow(
+    message: Message,
+    state: FSMContext,
+    input_parser_agent: InputParserAgent,
+    jtbd_agent: JTBDAgent,
+) -> None:
     current_state = await state.get_state()
     if current_state is not None:
         return
+
+    payload = await _ai_parse(input_parser_agent, message.text or "")
+    niche = _safe_text(payload.get("niche"))
+    if niche:
+        try:
+            segments_data = await asyncio.to_thread(jtbd_agent.generate_segments, niche)
+            segments = [str(item.get("segment", "")).strip() for item in segments_data if item.get("segment")]
+            if segments:
+                await state.update_data(niche=niche, segments=segments, selected_segments=[])
+                await state.set_state(AdGenerationStates.waiting_segment_selection)
+                indexed = "\n".join([f"{i + 1}. {seg}" for i, seg in enumerate(segments)])
+                await message.answer(
+                    "Принял новую нишу и пересобрал сегменты через ИИ.\n"
+                    "Шаг 2/6: выберите сегменты.\nМожно так: 1,3 или 1 и 3.\n\n"
+                    + indexed
+                )
+                return
+        except Exception:  # noqa: BLE001
+            logger.exception("Free-text niche processing failed")
 
     text = (message.text or "").strip().lower()
     if any(phrase in text for phrase in ("снова", "ещ", "заново", "повтор", "нов")):
