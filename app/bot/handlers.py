@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import tempfile
+from difflib import SequenceMatcher
 from typing import Any
 
 from aiogram import F, Router
@@ -119,6 +120,31 @@ def _safe_segment_numbers(payload: dict[str, Any], upper_bound: int) -> list[int
     return indexes
 
 
+def _segment_indexes_from_text(text: str, segments: list[str]) -> list[int]:
+    normalized = (text or "").strip().lower()
+    if not normalized:
+        return []
+
+    tokens = [token for token in re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9-]+", normalized) if len(token) >= 4]
+    if not tokens:
+        return []
+
+    scored: list[tuple[int, float]] = []
+    for idx, segment in enumerate(segments):
+        segment_low = segment.lower()
+        token_hits = sum(1 for token in tokens if token in segment_low)
+        ratio = SequenceMatcher(None, normalized, segment_low).ratio()
+        score = token_hits * 0.3 + ratio
+        if token_hits >= 1 or ratio >= 0.55:
+            scored.append((idx, score))
+
+    scored.sort(key=lambda item: item[1], reverse=True)
+    if not scored:
+        return []
+    # If user wrote free text, pick best 1-2 segments by semantic closeness.
+    return [item[0] for item in scored[:2]]
+
+
 def _safe_text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -192,8 +218,13 @@ async def _maybe_handle_niche_override(
 ) -> bool:
     intent = str(payload.get("intent", "")).lower()
     candidate_niche = _safe_text(payload.get("niche")) or _normalize_niche_candidate(message.text or "")
+    current_data = await state.get_data()
+    current_niche = str(current_data.get("niche", "")).strip().lower()
+    candidate_niche_low = candidate_niche.strip().lower()
+    is_different_niche = bool(candidate_niche_low and candidate_niche_low != current_niche)
     if intent != "set_niche" and not _looks_like_niche_reset(message.text or ""):
-        return False
+        if not is_different_niche:
+            return False
     if len(candidate_niche) < 4:
         return False
 
@@ -316,6 +347,8 @@ async def receive_segments(
         return
 
     indexes = _safe_segment_numbers(payload, len(segments)) or _extract_indexes(message.text or "", len(segments))
+    if not indexes:
+        indexes = _segment_indexes_from_text(message.text or "", segments)
     if not indexes:
         indexes = []
     chosen = [segments[i] for i in indexes]
