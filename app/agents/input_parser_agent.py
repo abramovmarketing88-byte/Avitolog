@@ -10,9 +10,11 @@ class InputParserAgent:
         self.system_prompt = load_prompt("input_parser.txt")
         self.assistant_id = assistant_id.strip()
 
-    def parse(self, text: str) -> dict[str, Any]:
+    def parse(self, text: str, context: dict[str, Any] | None = None) -> dict[str, Any]:
+        context = context or {}
         user_prompt = (
-            "Извлеки структуру из пользовательского ввода.\n"
+            "Извлеки структуру из пользовательского ввода с учетом текущего шага и уже известных данных.\n"
+            f"Контекст: {context}\n"
             f"Ввод: {text}\n"
             "Верни только JSON по формату из system prompt."
         )

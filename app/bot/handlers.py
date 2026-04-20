@@ -167,12 +167,53 @@ def _is_edit(payload: dict[str, Any], raw_text: str) -> bool:
 
 
 async def _ai_parse(input_parser_agent: InputParserAgent, text: str) -> dict[str, Any]:
+    return await _ai_parse_with_context(input_parser_agent, text, context={})
+
+
+async def _ai_parse_with_context(
+    input_parser_agent: InputParserAgent,
+    text: str,
+    context: dict[str, Any],
+) -> dict[str, Any]:
     try:
-        payload = await asyncio.to_thread(input_parser_agent.parse, text or "")
+        payload = await asyncio.to_thread(input_parser_agent.parse, text or "", context)
         return payload if isinstance(payload, dict) else {}
     except Exception:  # noqa: BLE001
         logger.exception("AI parsing failed")
         return {}
+
+
+async def _maybe_handle_niche_override(
+    *,
+    payload: dict[str, Any],
+    message: Message,
+    state: FSMContext,
+    jtbd_agent: JTBDAgent,
+) -> bool:
+    intent = str(payload.get("intent", "")).lower()
+    candidate_niche = _safe_text(payload.get("niche")) or _normalize_niche_candidate(message.text or "")
+    if intent != "set_niche" and not _looks_like_niche_reset(message.text or ""):
+        return False
+    if len(candidate_niche) < 4:
+        return False
+
+    try:
+        segments_data = await asyncio.to_thread(jtbd_agent.generate_segments, candidate_niche)
+        new_segments = [str(item.get("segment", "")).strip() for item in segments_data if item.get("segment")]
+        if not new_segments:
+            return False
+        await state.update_data(niche=candidate_niche, segments=new_segments, selected_segments=[])
+        await state.set_state(AdGenerationStates.waiting_segment_selection)
+        indexed = "\n".join([f"{i + 1}. {seg}" for i, seg in enumerate(new_segments)])
+        await message.answer(
+            "Принял новую нишу и пересобрал сегменты через ИИ.\n"
+            "Шаг 2/6: выберите сегменты.\nМожно так: 1,3 или 1 и 3.\n\n"
+            + indexed
+        )
+        return True
+    except Exception:  # noqa: BLE001
+        logger.exception("Failed to re-generate segments after set_niche intent")
+        return False
 
 
 def _geo_keyboard() -> ReplyKeyboardMarkup:
@@ -229,7 +270,11 @@ async def receive_niche(
     jtbd_agent: JTBDAgent,
     input_parser_agent: InputParserAgent,
 ) -> None:
-    payload = await _ai_parse(input_parser_agent, message.text or "")
+    payload = await _ai_parse_with_context(
+        input_parser_agent,
+        message.text or "",
+        context={"state": "waiting_niche"},
+    )
     niche = _safe_text(payload.get("niche")) or (message.text or "").strip()
     if not niche:
         await message.answer("Ниша не должна быть пустой. Напишите одним сообщением, что продвигаем.")
@@ -261,7 +306,14 @@ async def receive_segments(
 ) -> None:
     data = await state.get_data()
     segments: list[str] = data.get("segments", [])
-    payload = await _ai_parse(input_parser_agent, message.text or "")
+    payload = await _ai_parse_with_context(
+        input_parser_agent,
+        message.text or "",
+        context={"state": "waiting_segment_selection", "niche": data.get("niche"), "segments": segments},
+    )
+
+    if await _maybe_handle_niche_override(payload=payload, message=message, state=state, jtbd_agent=jtbd_agent):
+        return
 
     indexes = _safe_segment_numbers(payload, len(segments)) or _extract_indexes(message.text or "", len(segments))
     if not indexes:
@@ -269,24 +321,6 @@ async def receive_segments(
     chosen = [segments[i] for i in indexes]
 
     if not chosen:
-        candidate_niche = _safe_text(payload.get("niche")) or _normalize_niche_candidate(message.text or "")
-        if (payload.get("intent") == "set_niche" or _looks_like_niche_reset(message.text or "")) and len(candidate_niche) >= 6:
-            try:
-                segments_data = await asyncio.to_thread(jtbd_agent.generate_segments, candidate_niche)
-                new_segments = [str(item.get("segment", "")).strip() for item in segments_data if item.get("segment")]
-                if new_segments:
-                    await state.update_data(niche=candidate_niche, segments=new_segments, selected_segments=[])
-                    await state.set_state(AdGenerationStates.waiting_segment_selection)
-                    indexed = "\n".join([f"{i + 1}. {seg}" for i, seg in enumerate(new_segments)])
-                    await message.answer(
-                        "Ок, сменил нишу и пересобрал сегменты через ИИ.\n"
-                        "Шаг 2/6: выберите сегменты.\nМожно так: 1,3 или 1 и 3.\n\n"
-                        + indexed
-                    )
-                    return
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to re-generate segments from free text niche change")
-
         await message.answer("Не понял выбор сегментов. Пример: 1,3 или «первый и третий».")
         return
 
@@ -300,8 +334,20 @@ async def receive_segments(
 
 
 @router.message(AdGenerationStates.waiting_ads_count)
-async def receive_ads_count(message: Message, state: FSMContext, input_parser_agent: InputParserAgent) -> None:
-    payload = await _ai_parse(input_parser_agent, message.text or "")
+async def receive_ads_count(
+    message: Message,
+    state: FSMContext,
+    input_parser_agent: InputParserAgent,
+    jtbd_agent: JTBDAgent,
+) -> None:
+    data = await state.get_data()
+    payload = await _ai_parse_with_context(
+        input_parser_agent,
+        message.text or "",
+        context={"state": "waiting_ads_count", "niche": data.get("niche"), "selected_segments": data.get("selected_segments")},
+    )
+    if await _maybe_handle_niche_override(payload=payload, message=message, state=state, jtbd_agent=jtbd_agent):
+        return
     parsed_count = payload.get("ads_count")
     count = parsed_count if isinstance(parsed_count, int) else _extract_first_int((message.text or "").strip())
     if count is None or count <= 0 or count > 300:
@@ -318,8 +364,20 @@ async def receive_ads_count(message: Message, state: FSMContext, input_parser_ag
 
 
 @router.message(AdGenerationStates.waiting_cities)
-async def receive_cities(message: Message, state: FSMContext, input_parser_agent: InputParserAgent) -> None:
-    payload = await _ai_parse(input_parser_agent, message.text or "")
+async def receive_cities(
+    message: Message,
+    state: FSMContext,
+    input_parser_agent: InputParserAgent,
+    jtbd_agent: JTBDAgent,
+) -> None:
+    data = await state.get_data()
+    payload = await _ai_parse_with_context(
+        input_parser_agent,
+        message.text or "",
+        context={"state": "waiting_cities", "niche": data.get("niche"), "ads_count": data.get("ads_count")},
+    )
+    if await _maybe_handle_niche_override(payload=payload, message=message, state=state, jtbd_agent=jtbd_agent):
+        return
     cities = _safe_cities(payload) or _extract_cities(message.text or "")
     if not cities:
         await message.answer("Список городов пуст. Попробуйте снова.")
@@ -350,8 +408,16 @@ async def receive_geo_type(
     state: FSMContext,
     orchestrator: AdsOrchestrator,
     input_parser_agent: InputParserAgent,
+    jtbd_agent: JTBDAgent,
 ) -> None:
-    payload = await _ai_parse(input_parser_agent, message.text or "")
+    data = await state.get_data()
+    payload = await _ai_parse_with_context(
+        input_parser_agent,
+        message.text or "",
+        context={"state": "waiting_geo_type", "niche": data.get("niche"), "cities": data.get("cities")},
+    )
+    if await _maybe_handle_niche_override(payload=payload, message=message, state=state, jtbd_agent=jtbd_agent):
+        return
     geo_type = _safe_geo(payload) or _normalize_geo_type(message.text or "")
     if geo_type not in ALLOWED_GEO:
         await message.answer("Некорректный GEO. Используйте: city / metro / district / address")
@@ -373,11 +439,19 @@ async def receive_confirmation(
     state: FSMContext,
     orchestrator: AdsOrchestrator,
     input_parser_agent: InputParserAgent,
+    jtbd_agent: JTBDAgent,
 ) -> None:
-    payload = await _ai_parse(input_parser_agent, message.text or "")
+    data = await state.get_data()
+    payload = await _ai_parse_with_context(
+        input_parser_agent,
+        message.text or "",
+        context={"state": "waiting_confirmation", "data": data},
+    )
+    if await _maybe_handle_niche_override(payload=payload, message=message, state=state, jtbd_agent=jtbd_agent):
+        return
     text = (message.text or "").strip().lower()
     if _is_confirm(payload, text):
-        data: dict[str, Any] = await state.get_data()
+        data = await state.get_data()
         config = GenerationConfig(
             niche=data["niche"],
             selected_segments=data["selected_segments"],
