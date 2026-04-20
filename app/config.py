@@ -13,6 +13,9 @@ class Settings:
     openai_model: str = "gpt-4o-mini"
     default_temperature: float = 0.7
     max_retries: int = 3
+    assistant_jtbd_parser_id: str = ""
+    assistant_creative_builder_id: str = ""
+    assistant_spintax_html_id: str = ""
 
     @staticmethod
     def from_env() -> "Settings":
@@ -21,6 +24,9 @@ class Settings:
         openai_model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip()
         default_temperature = float(os.getenv("DEFAULT_TEMPERATURE", "0.7"))
         max_retries = int(os.getenv("MAX_RETRIES", "3"))
+        assistant_jtbd_parser_id = os.getenv("ASSISTANT_JTBD_PARSER_ID", "").strip()
+        assistant_creative_builder_id = os.getenv("ASSISTANT_CREATIVE_BUILDER_ID", "").strip()
+        assistant_spintax_html_id = os.getenv("ASSISTANT_SPINTAX_HTML_ID", "").strip()
 
         return Settings(
             openai_api_key=openai_api_key,
@@ -28,4 +34,7 @@ class Settings:
             openai_model=openai_model,
             default_temperature=default_temperature,
             max_retries=max_retries,
+            assistant_jtbd_parser_id=assistant_jtbd_parser_id,
+            assistant_creative_builder_id=assistant_creative_builder_id,
+            assistant_spintax_html_id=assistant_spintax_html_id,
         )

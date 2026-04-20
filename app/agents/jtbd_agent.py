@@ -8,10 +8,11 @@ logger = logging.getLogger(__name__)
 
 
 class JTBDAgent:
-    def __init__(self, openai_service: OpenAIService, temperature: float):
+    def __init__(self, openai_service: OpenAIService, temperature: float, assistant_id: str = ""):
         self.openai_service = openai_service
         self.temperature = temperature
         self.system_prompt = load_prompt("jtbd.txt")
+        self.assistant_id = assistant_id.strip()
 
     def generate_segments(self, niche: str) -> list[dict[str, Any]]:
         user_prompt = (
@@ -21,7 +22,12 @@ class JTBDAgent:
         )
         try:
             # Lower temperature for strict JSON structure and stable schema.
-            result = self.openai_service.generate_json(self.system_prompt, user_prompt, min(self.temperature, 0.2))
+            result = self.openai_service.generate_json(
+                self.system_prompt,
+                user_prompt,
+                min(self.temperature, 0.2),
+                assistant_id=self.assistant_id or None,
+            )
             if isinstance(result, dict):
                 for key in ("segments", "data", "items", "result"):
                     candidate = result.get(key)

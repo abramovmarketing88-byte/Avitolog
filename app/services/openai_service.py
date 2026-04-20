@@ -16,19 +16,48 @@ class OpenAIService:
         self.model = model
         self.max_retries = max_retries
 
-    def generate_text(self, system_prompt: str, user_prompt: str, temperature: float) -> str:
+    def generate_text(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        assistant_id: str | None = None,
+    ) -> str:
         last_error: Exception | None = None
 
         for attempt in range(1, self.max_retries + 1):
             try:
-                response = self.client.responses.create(
-                    model=self.model,
-                    temperature=temperature,
-                    input=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                )
+                if assistant_id:
+                    try:
+                        response = self.client.responses.create(
+                            model=self.model,
+                            assistant_id=assistant_id,
+                            temperature=temperature,
+                            input=user_prompt,
+                        )
+                    except Exception as assistant_exc:  # noqa: BLE001
+                        logger.warning(
+                            "Assistant call failed, fallback to system prompt mode. assistant_id=%s error=%s",
+                            assistant_id,
+                            assistant_exc,
+                        )
+                        response = self.client.responses.create(
+                            model=self.model,
+                            temperature=temperature,
+                            input=[
+                                {"role": "system", "content": system_prompt},
+                                {"role": "user", "content": user_prompt},
+                            ],
+                        )
+                else:
+                    response = self.client.responses.create(
+                        model=self.model,
+                        temperature=temperature,
+                        input=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                    )
                 return (response.output_text or "").strip()
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
@@ -37,8 +66,14 @@ class OpenAIService:
 
         raise RuntimeError(f"OpenAI generation failed after retries: {last_error}")
 
-    def generate_json(self, system_prompt: str, user_prompt: str, temperature: float) -> Any:
-        text = self.generate_text(system_prompt, user_prompt, temperature)
+    def generate_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        assistant_id: str | None = None,
+    ) -> Any:
+        text = self.generate_text(system_prompt, user_prompt, temperature, assistant_id=assistant_id)
         if not text.strip():
             raise ValueError("Model returned empty JSON response")
 
