@@ -316,3 +316,24 @@ async def receive_confirmation(message: Message, state: FSMContext, orchestrator
         "Выберите действие кнопкой: «✅ Подтвердить» или «✏️ Изменить параметры».",
         reply_markup=_confirm_keyboard(),
     )
+
+
+@router.message(F.text)
+async def handle_free_text_after_flow(message: Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    if current_state is not None:
+        return
+
+    text = (message.text or "").strip().lower()
+    if any(phrase in text for phrase in ("снова", "ещ", "заново", "повтор", "нов")):
+        await state.set_state(AdGenerationStates.waiting_niche)
+        await message.answer(
+            "Запускаем новый цикл.\n\nШаг 1/6: отправьте нишу или услугу.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    await message.answer(
+        "Готов начать новый расчет. Нажмите /start или напишите «снова».",
+        reply_markup=ReplyKeyboardRemove(),
+    )
