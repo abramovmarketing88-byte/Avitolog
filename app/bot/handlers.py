@@ -35,7 +35,14 @@ def _extract_html_template(raw: str) -> str:
 
 def _build_csv_bytes(rows: list[str]) -> bytes:
     buffer = io.StringIO(newline="")
-    writer = csv.writer(buffer, delimiter=";")
+    # Use comma + full quoting so Excel keeps HTML in one cell.
+    writer = csv.writer(
+        buffer,
+        delimiter=",",
+        quotechar='"',
+        quoting=csv.QUOTE_ALL,
+        lineterminator="\n",
+    )
     writer.writerow(["description"])
     for row in rows:
         writer.writerow([row])
