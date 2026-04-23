@@ -23,6 +23,7 @@ def create_dispatcher(settings: Settings) -> tuple[Bot, Dispatcher]:
     dp = Dispatcher()
     dp["openai_service"] = openai_service
     dp["assistant_id"] = settings.assistant_id
+    dp["user_message_suffix"] = settings.user_message_suffix
     dp.include_router(router)
 
     return bot, dp

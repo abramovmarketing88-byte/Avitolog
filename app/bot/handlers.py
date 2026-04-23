@@ -33,15 +33,19 @@ async def on_text(
     message: Message,
     openai_service: OpenAIService,
     assistant_id: str,
+    user_message_suffix: str = "",
 ) -> None:
     user_text = (message.text or "").strip()
     if not user_text:
         await message.answer("Текст пустой. Напишите сообщение с содержанием.")
         return
 
+    suffix = (user_message_suffix or "").strip()
+    payload = f"{user_text}\n\n{suffix}" if suffix else user_text
+
     status = await message.answer("Обрабатываю…")
     try:
-        result = await asyncio.to_thread(openai_service.run_assistant, assistant_id, user_text)
+        result = await asyncio.to_thread(openai_service.run_assistant, assistant_id, payload)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Assistant error")
         await status.edit_text(f"Ошибка: {exc}")
