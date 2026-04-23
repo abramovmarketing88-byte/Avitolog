@@ -1,9 +1,10 @@
 import asyncio
+import json
 import logging
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import BufferedInputFile, Message
 
 from app.services.openai_service import OpenAIService
 
@@ -11,21 +12,9 @@ from app.services.openai_service import OpenAIService
 logger = logging.getLogger(__name__)
 router = Router()
 
-_TELEGRAM_CHUNK = 4000
-
-
-def _split_reply(text: str, max_len: int = _TELEGRAM_CHUNK) -> list[str]:
-    text = (text or "").strip()
-    if not text:
-        return []
-    if len(text) <= max_len:
-        return [text]
-    return [text[i : i + max_len] for i in range(0, len(text), max_len)]
-
-
 @router.message(CommandStart())
 async def cmd_start(message: Message) -> None:
-    await message.answer("Отправьте текст объявления одним сообщением.")
+    await message.answer("Отправьте текст объявления одним сообщением. В ответ пришлю JSON-файл.")
 
 
 @router.message(F.text, ~F.text.startswith("/"))
@@ -55,9 +44,14 @@ async def on_text(
         await status.edit_text("Ассистент вернул пустой ответ. Попробуйте переформулировать текст.")
         return
 
+    payload = {"html_template": result.strip()}
+    data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
     await status.delete()
-    for chunk in _split_reply(result):
-        await message.answer(chunk)
+    await message.answer_document(
+        BufferedInputFile(data, filename="result.json"),
+        caption="Готово: отправил JSON-файл.",
+    )
 
 
 @router.message(~F.text)
