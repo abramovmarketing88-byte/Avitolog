@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 router = Router()
 _pending_templates: dict[int, str] = {}
 _MAX_ADS_COUNT = 1000
+_STYLE_PRESERVE_SUFFIX = (
+    "STYLE LOCK (MANDATORY): Preserve expressive style from source text. "
+    "Keep emojis, visual markers, and emphasis structure. "
+    "Do not make tone drier than source. "
+    "Keep <strong> highlights for key headers and CTA blocks."
+)
 
 
 def _extract_html_template(raw: str) -> str:
@@ -88,8 +94,12 @@ async def on_text(
         _pending_templates.pop(user_id, None)
         return
 
-    suffix = (user_message_suffix or "").strip()
-    payload = f"{user_text}\n\n{suffix}" if suffix else user_text
+    custom_suffix = (user_message_suffix or "").strip()
+    suffix_parts = [_STYLE_PRESERVE_SUFFIX]
+    if custom_suffix:
+        suffix_parts.append(custom_suffix)
+    suffix = "\n".join(suffix_parts)
+    payload = f"{user_text}\n\n{suffix}"
 
     status = await message.answer("Обрабатываю…")
     try:

@@ -120,6 +120,16 @@ If draft contains multiple lines, normalize it into one line before final output
   • CTA
 — Forbidden: collapsing long source text into a short abstract.
 
+## 6) STYLE PRESERVATION (EMOJI + EMPHASIS LOCK)
+— Preserve expressive style from source when present:
+  • emojis / icon markers (✅ 📌 💡 📞 etc.)
+  • emphasis and visual hierarchy
+  • energetic tone and persuasive rhythm
+— Do NOT downgrade style into dry/plain neutral text.
+— If source uses visual bullets/icons, keep them in output (with variation, but same intensity).
+— Keep key semantic highlights inside <strong> blocks (headings, value points, CTA).
+— If source has emojis, output must also contain emojis in relevant blocks.
+
 ────────────────────────────────────────
 # CONTENT STRUCTURE
 
